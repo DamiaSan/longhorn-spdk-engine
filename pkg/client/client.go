@@ -948,6 +948,39 @@ func (c *SPDKClient) BackingImageUnexpose(name, lvsUUID string) error {
 	return nil
 }
 
+func (c *SPDKClient) ReplicaVolumeExpand(name string, size uint64) error {
+	if name == "" {
+		return fmt.Errorf("failed to expand replica volume: missing required parameter name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaVolumeExpand(ctx, &spdkrpc.ExpandRequest{
+		Name: name,
+		Size: size,
+	})
+	return errors.Wrapf(err, "failed to expand SPDK replica %s volume", name)
+}
+
+func (c *SPDKClient) EngineVolumeExpand(name string, size uint64) error {
+	if name == "" {
+		return fmt.Errorf("failed to expand SPDK engine volume: missing required parameter name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineVolumeExpand(ctx, &spdkrpc.ExpandRequest{
+		Name: name,
+		Size: size,
+	})
+
+	return errors.Wrapf(err, "failed to expand SPDK engine %s volume", name)
+}
+
 // DiskCreate creates a disk with the given name and path.
 // diskUUID is optional, if not provided, it indicates the disk is newly added.
 func (c *SPDKClient) DiskCreate(diskName, diskUUID, diskPath, diskDriver string, blockSize int64) (*spdkrpc.Disk, error) {

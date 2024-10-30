@@ -1463,6 +1463,40 @@ func (s *Server) ReplicaRestoreStatus(ctx context.Context, req *spdkrpc.ReplicaR
 	}, nil
 }
 
+func (s *Server) ReplicaVolumeExpand(ctx context.Context, req *spdkrpc.ExpandRequest) (ret *emptypb.Empty, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	spdkClient := s.spdkClient
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during volume expand", req.Name)
+	}
+
+	return &emptypb.Empty{}, r.VolumeExpand(spdkClient, req.Size)
+}
+
+func (s *Server) EngineVolumeExpand(ctx context.Context, req *spdkrpc.ExpandRequest) (ret *emptypb.Empty, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name is required")
+	}
+
+	s.RLock()
+	e := s.engineMap[req.Name]
+	spdkClient := s.spdkClient
+	s.RUnlock()
+
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for volume expansion", req.Name)
+	}
+
+	return &emptypb.Empty{}, e.VolumeExpand(spdkClient, req.Size)
+}
+
 func (s *Server) DiskCreate(ctx context.Context, req *spdkrpc.DiskCreateRequest) (ret *spdkrpc.Disk, err error) {
 	s.RLock()
 	spdkClient := s.spdkClient

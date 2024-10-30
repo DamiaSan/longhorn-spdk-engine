@@ -1876,3 +1876,87 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 	err = spdkCli.ReplicaDelete(replicaName2, false)
 	c.Assert(err, IsNil)
 }
+
+func (s *TestSuite) TestSPDKVolumeExpand(c *C) {
+	fmt.Println("Testing SPDK volume expansion with engine only with target")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	os.Setenv(commonnet.EnvPodIP, ip)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := "test-vol"
+	engineName := fmt.Sprintf("%s-engine", volumeName)
+	replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
+	replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
+
+	replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+
+	replicaAddressMap := map[string]string{
+		replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
+		replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
+	}
+
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, "127.0.0.1", ip, false)
+	c.Assert(err, IsNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+	c.Assert(engine.SpecSize, Equals, defaultTestLvolSize)
+
+	spdkCli.EngineVolumeExpand(engineName, defaultTestLvolSize*2)
+	c.Assert(err, IsNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+
+	engine, err = spdkCli.EngineGet(engineName)
+	c.Assert(err, IsNil)
+	c.Assert(engine.SpecSize, Equals, defaultTestLvolSize*2)
+
+	replica2, err = spdkCli.ReplicaGet(replicaName2)
+	c.Assert(err, IsNil)
+	c.Assert(replica2.SpecSize, Equals, defaultTestLvolSize*2)
+
+	replica1, err = spdkCli.ReplicaGet(replicaName1)
+	c.Assert(err, IsNil)
+	c.Assert(replica1.SpecSize, Equals, defaultTestLvolSize*2)
+
+	// Our engine is a raid1 bdev created with nvme bdevs that are logical volumes exported via nvme-of and attached on raid host.
+	// The resizing of lvols is done synchrnously, but the resize of the nvme bdevs is done asynchrnously. So, if we delete the nvme
+	// controller before the resizing si complete, spdk abort with an assert. This sleep solve the problem.
+	time.Sleep(time.Second)
+
+	// Cleanup
+	err = spdkCli.EngineDeleteTarget(engineName)
+	c.Assert(err, IsNil)
+	err = spdkCli.ReplicaDelete(replicaName1, false)
+	c.Assert(err, IsNil)
+	err = spdkCli.ReplicaDelete(replicaName2, false)
+	c.Assert(err, IsNil)
+}
