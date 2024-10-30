@@ -2184,3 +2184,46 @@ func (r *Replica) SetErrorState() {
 		needUpdate = true
 	}
 }
+
+// func (r *Replica) VolumeExpand(spdkClient *spdkclient.Client, newSize uint64) (pReplica *spdkrpc.Replica, err error) {
+func (r *Replica) VolumeExpand(spdkClient *spdkclient.Client, newSize uint64) (err error) {
+	updateRequired := false
+
+	r.Lock()
+	defer func() {
+		r.Unlock()
+
+		if updateRequired {
+			r.UpdateCh <- nil
+		}
+	}()
+
+	defer func() {
+		if err != nil {
+			if r.State != types.InstanceStateError {
+				r.State = types.InstanceStateError
+				updateRequired = true
+			}
+			r.ErrorMsg = err.Error()
+		} else {
+			if r.State != types.InstanceStateError {
+				r.ErrorMsg = ""
+			}
+		}
+	}()
+
+	if newSize <= r.SpecSize {
+		return fmt.Errorf("newsize %d must be greater than spec size %d", newSize, r.SpecSize)
+	}
+
+	if _, err := spdkClient.BdevLvolResize(r.Alias, newSize); err != nil {
+		return err
+	}
+
+	r.SpecSize = newSize
+	updateRequired = true
+
+	r.log.Infof("Volume %s expanded to size %d", r.Name, r.SpecSize)
+
+	return
+}

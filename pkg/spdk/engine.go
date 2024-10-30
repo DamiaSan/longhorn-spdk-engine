@@ -2267,3 +2267,57 @@ func engineOnlyContainsInitiator(e *Engine) bool {
 func engineOnlyContainsTarget(e *Engine) bool {
 	return e.Port == 0 && e.TargetPort != 0
 }
+
+func (e *Engine) VolumeExpand(spdkClient *spdkclient.Client, size uint64) (err error) {
+	updateRequired := false
+
+	e.Lock()
+	defer func() {
+		e.Unlock()
+
+		if updateRequired {
+			e.UpdateCh <- nil
+		}
+	}()
+
+	// Syncing with the SPDK TGT server only when the engine is running.
+	if e.State != types.InstanceStateRunning {
+		return fmt.Errorf("invalid state %v for engine %s volume expansion", e.State, e.Name)
+	}
+
+	replicaClients, err := e.getReplicaClients()
+	if err != nil {
+		return err
+	}
+	defer e.closeRplicaClients(replicaClients)
+
+	defer func() {
+		if err != nil {
+			if e.State != types.InstanceStateError {
+				e.State = types.InstanceStateError
+				updateRequired = true
+			}
+			e.ErrorMsg = err.Error()
+		} else {
+			if e.State != types.InstanceStateError {
+				e.ErrorMsg = ""
+			}
+		}
+	}()
+
+	for replicaName := range replicaClients {
+		if err := replicaClients[replicaName].ReplicaVolumeExpand(replicaName, size); err != nil && e.ReplicaModeMap[replicaName] != types.ModeERR {
+			e.log.WithError(err).Errorf("Engine failed to volume expansion for replica %s, will mark the replica mode from %v to ERR", replicaName, e.ReplicaModeMap[replicaName])
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			updateRequired = true
+		}
+	}
+
+	if !updateRequired {
+		e.SpecSize = size
+	}
+
+	e.log.Infof("Engine finished volume expansion")
+
+	return nil
+}
